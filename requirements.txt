@@ -1,0 +1,9 @@
+gradio
+torch
+transformers
+scikit-learn
+pandas
+numpy
+datasets
+accelerate
+safetensors
