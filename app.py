@@ -2,45 +2,67 @@
 import os
 import re
 import html
+import urllib.request
+
 import torch
 import gradio as gr
 
 from torch import nn
 from transformers import AutoTokenizer, AutoModel
 
-# -----------------------------
-# 1. Configuration
-# -----------------------------
+
+# ==========================================
+# 1. CONFIGURATION
+# ==========================================
 
 MODEL_NAME = "distilbert-base-uncased"
 MAX_LEN = 128
 
 MODEL_PATH = "multitask_model.pt"
 
-SENT_LABELS = ["Negative", "Neutral", "Positive"]
-
-EMO_LABELS = [
-    "Joy", "Sadness", "Anger",
-    "Fear", "Disgust", "Surprise"
-]
-
-# The aspect head has 3 classes.
-# Replace these names if your notebook defines different aspect labels.
-ASP_LABELS = ["Aspect class 0", "Aspect class 1", "Aspect class 2"]
+MODEL_URL = (
+    "https://github.com/sravankumarreddy123/"
+    "product-review-sentiment/releases/download/"
+    "v1.0.0/multitask_model.pt"
+)
 
 DEVICE = torch.device("cpu")
+
+SENT_LABELS = [
+    "Negative",
+    "Neutral",
+    "Positive"
+]
+
+EMO_LABELS = [
+    "Joy",
+    "Sadness",
+    "Anger",
+    "Fear",
+    "Disgust",
+    "Surprise"
+]
+
+# Replace these with the exact aspect labels
+# from your notebook if they are different.
+ASP_LABELS = [
+    "Aspect class 0",
+    "Aspect class 1",
+    "Aspect class 2"
+]
 
 tokenizer = None
 model = None
 
 
-# -----------------------------
-# 2. Model architecture
-# -----------------------------
+# ==========================================
+# 2. MULTI-TASK DISTILBERT MODEL
+# ==========================================
 
 class MultiTaskModel(nn.Module):
 
     def __init__(self, name):
+
         super().__init__()
 
         self.encoder = AutoModel.from_pretrained(name)
@@ -50,9 +72,13 @@ class MultiTaskModel(nn.Module):
         self.drop = nn.Dropout(0.1)
 
         self.heads = nn.ModuleDict({
+
             "sent": nn.Linear(h, 3),
+
             "emo": nn.Linear(h, 6),
+
             "asp": nn.Linear(h, 3)
+
         })
 
     def forward(self, input_ids, attention_mask, task="sent"):
@@ -65,9 +91,56 @@ class MultiTaskModel(nn.Module):
         return self.heads[task](self.drop(cls))
 
 
-# -----------------------------
-# 3. Load tokenizer and model
-# -----------------------------
+# ==========================================
+# 3. DOWNLOAD TRAINED MODEL
+# ==========================================
+
+def download_model():
+
+    if os.path.exists(MODEL_PATH):
+
+        print("Trained model already exists.")
+
+        return
+
+    print("Downloading trained model from GitHub...")
+
+    try:
+
+        request = urllib.request.Request(
+            MODEL_URL,
+            headers={"User-Agent": "Product-Review-App"}
+        )
+
+        with urllib.request.urlopen(request, timeout=300) as response:
+
+            with open(MODEL_PATH, "wb") as file:
+
+                while True:
+
+                    chunk = response.read(1024 * 1024)
+
+                    if not chunk:
+                        break
+
+                    file.write(chunk)
+
+        print("Model downloaded successfully.")
+
+    except Exception:
+
+        if os.path.exists(MODEL_PATH):
+            os.remove(MODEL_PATH)
+
+        raise RuntimeError(
+            "Unable to download multitask_model.pt. "
+            "Check the GitHub Release URL."
+        )
+
+
+# ==========================================
+# 4. LOAD TOKENIZER AND MODEL
+# ==========================================
 
 def load_model():
 
@@ -76,14 +149,13 @@ def load_model():
     if model is not None:
         return
 
-    if not os.path.exists(MODEL_PATH):
-        raise FileNotFoundError(
-            "Model file multitask_model.pt was not found. "
-            "Please make the trained model file available "
-            "in the application's root directory."
-        )
+    print("Loading tokenizer...")
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+
+    download_model()
+
+    print("Loading trained model...")
 
     model = MultiTaskModel(MODEL_NAME)
 
@@ -96,12 +168,15 @@ def load_model():
     model.load_state_dict(state_dict)
 
     model.to(DEVICE)
+
     model.eval()
 
+    print("Model loaded successfully!")
 
-# -----------------------------
-# 4. Text cleaning
-# -----------------------------
+
+# ==========================================
+# 5. TEXT CLEANING
+# ==========================================
 
 def clean_text(text):
 
@@ -109,21 +184,26 @@ def clean_text(text):
 
     text = re.sub(r"<[^>]+>", " ", text)
 
-    text = re.sub(r"http\S+|www\.\S+", " ", text)
+    text = re.sub(
+        r"http\S+|www\.\S+",
+        " ",
+        text
+    )
 
     text = re.sub(r"\s+", " ", text).strip()
 
     return text
 
 
-# -----------------------------
-# 5. Prediction function
-# -----------------------------
+# ==========================================
+# 6. PREDICTION FUNCTION
+# ==========================================
 
 def predict_review(review, task):
 
     if not review or not review.strip():
-        return "Please enter a review."
+
+        return "Please enter a product review."
 
     try:
 
@@ -145,9 +225,13 @@ def predict_review(review, task):
         }
 
         task_map = {
+
             "Sentiment": ("sent", SENT_LABELS),
+
             "Emotion": ("emo", EMO_LABELS),
+
             "Aspect": ("asp", ASP_LABELS)
+
         }
 
         task_name, labels = task_map[task]
@@ -160,11 +244,18 @@ def predict_review(review, task):
                 task=task_name
             )
 
-            probabilities = torch.softmax(logits, dim=1)[0]
+            probabilities = torch.softmax(
+                logits,
+                dim=1
+            )[0]
 
-            predicted_index = torch.argmax(probabilities).item()
+            predicted_index = torch.argmax(
+                probabilities
+            ).item()
 
-            confidence = probabilities[predicted_index].item() * 100
+            confidence = (
+                probabilities[predicted_index].item() * 100
+            )
 
         predicted_label = labels[predicted_index]
 
@@ -173,37 +264,47 @@ def predict_review(review, task):
             f"Confidence: {confidence:.2f}%"
         )
 
-    except FileNotFoundError as error:
-        return f"Model file error: {error}"
-
     except Exception as error:
-        return f"Prediction error: {str(error)}"
+
+        return f"Error: {str(error)}"
 
 
-# -----------------------------
-# 6. Gradio interface
-# -----------------------------
+# ==========================================
+# 7. GRADIO USER INTERFACE
+# ==========================================
 
-with gr.Blocks(title="Product Review Sentiment Analysis") as demo:
+with gr.Blocks(
+    title="Product Review Sentiment Analysis",
+    theme=gr.themes.Soft()
+) as demo:
 
     gr.Markdown(
         """
         # Product Review Sentiment Analysis
 
-        Analyze product reviews using a Multi-Task DistilBERT model.
+        ### Multi-Task DistilBERT Model
 
-        Enter a product review and select the prediction task.
+        Analyze product reviews using Artificial Intelligence.
+
+        Select a task to predict sentiment, emotion, or aspect class.
         """
     )
 
     review_input = gr.Textbox(
         label="Enter Product Review",
-        placeholder="Example: This phone has excellent battery life...",
+        placeholder=(
+            "Example: This phone has excellent battery "
+            "life and a very good camera."
+        ),
         lines=5
     )
 
     task_input = gr.Dropdown(
-        choices=["Sentiment", "Emotion", "Aspect"],
+        choices=[
+            "Sentiment",
+            "Emotion",
+            "Aspect"
+        ],
         value="Sentiment",
         label="Select Prediction Task"
     )
@@ -220,14 +321,38 @@ with gr.Blocks(title="Product Review Sentiment Analysis") as demo:
 
     predict_button.click(
         fn=predict_review,
-        inputs=[review_input, task_input],
+        inputs=[
+            review_input,
+            task_input
+        ],
         outputs=output
     )
 
+    gr.Examples(
+        examples=[
+            [
+                "This phone has excellent battery life.",
+                "Sentiment"
+            ],
+            [
+                "I am very happy with this product!",
+                "Emotion"
+            ],
+            [
+                "The camera quality is poor.",
+                "Aspect"
+            ]
+        ],
+        inputs=[
+            review_input,
+            task_input
+        ]
+    )
 
-# -----------------------------
-# 7. Start application
-# -----------------------------
+
+# ==========================================
+# 8. START APPLICATION
+# ==========================================
 
 if __name__ == "__main__":
 
